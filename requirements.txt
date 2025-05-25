@@ -4,3 +4,4 @@ pandas
 openai
 SpeechRecognition
 gtts
+matplotlib
