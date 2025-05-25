@@ -3,61 +3,53 @@ import streamlit as st
 import pandas as pd
 import openai
 import matplotlib.pyplot as plt
-import io
 from gtts import gTTS
 import os
 import traceback
+from streamlit_webrtc import webrtc_streamer, AudioProcessorBase
 
-# Set up page
 st.set_page_config(layout="wide")
-st.title("🤖 AI Voice Bot – Dynamic Real Estate Analyst")
+st.title("🎙️ Executive AI Voice Bot – Real Estate Insights")
 
-# Load OpenAI Key
 openai.api_key = st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets else "sk-..."
 
-# Upload data
-st.sidebar.header("📁 Upload Sales Data")
-uploaded_file = st.sidebar.file_uploader("Upload a CSV file", type=["csv"])
+st.sidebar.header("📂 Upload Sales Data")
+uploaded_file = st.sidebar.file_uploader("Upload your CSV", type=["csv"])
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
-    st.success("✅ File uploaded successfully.")
+    st.success("✅ Custom data uploaded")
 else:
     df = pd.read_csv("Sales data.csv")
-    st.info("📌 Using default sales data.")
+    st.info("Using default data")
 
-# Clean and prep data
 df.columns = df.columns.str.strip()
 if "Booking Date" in df.columns:
     df["Booking Date"] = pd.to_datetime(df["Booking Date"], errors='coerce')
 
-st.sidebar.markdown("### Sample of Loaded Data")
-st.sidebar.dataframe(df.head(5))
-
-# Text-to-speech
 def speak_text(text):
     tts = gTTS(text)
     tts.save("response.mp3")
     audio_file = open("response.mp3", "rb")
     st.audio(audio_file.read(), format="audio/mp3")
 
-# GPT function for both answering and generating chart code
 def get_gpt_response(question, context_schema):
     prompt = f"""
-You are a data analyst AI. Given a question and the structure of a dataset, do two things:
-1. Provide a brief natural language answer or insight.
-2. Generate a Python matplotlib chart code snippet (within a function) based on the question.
+You are a senior real estate data analyst bot. Based on the dataset schema and a natural language question, do two things:
+1. Return a short and useful business insight.
+2. Write a matplotlib chart code to visualize the answer.
 
-Respond in this format strictly:
+Use this response format only:
 <response>
 <code>
 ```python
 # your code here
 ```
 
-Here is the dataset schema:
+Schema:
 {context_schema}
 
-Question: {question}
+Question:
+{question}
 """
     response = openai.ChatCompletion.create(
         model="gpt-4",
@@ -65,37 +57,46 @@ Question: {question}
     )
     return response.choices[0].message.content.strip()
 
-# UI for asking questions
-st.markdown("## 🎙️ Ask Your Question About the Data")
-user_input = st.text_input("E.g., What are top nationalities by net sale value?")
+col1, col2 = st.columns([1, 1])
 
-if user_input:
-    st.markdown(f"**You asked:** {user_input}")
-    # Schema sample
-    context = df.dtypes.astype(str).to_string()
-    with st.spinner("🧠 Thinking..."):
-        gpt_output = get_gpt_response(user_input, context)
+with col1:
+    st.header("🧠 Ask Your Question")
+    question = st.text_input("Type your question (e.g., 'Show top projects by sales')")
+    st.markdown("🎤 **Voice input coming soon** via browser mic")
 
-    # Split response and code
-    try:
-        response_part, code_part = gpt_output.split("```python")
-        chart_code = code_part.replace("```", "").strip()
-    except:
-        st.error("Could not parse the GPT response. Here's what it returned:")
-        st.code(gpt_output)
-        response_part = gpt_output
-        chart_code = ""
+    if question:
+        st.markdown(f"**You asked:** {question}")
+        with st.spinner("Analyzing your data..."):
+            context = df.dtypes.astype(str).to_string()
+            gpt_output = get_gpt_response(question, context)
 
-    # Show natural language answer
-    st.success(response_part.strip())
-    speak_text(response_part.strip())
-
-    # Execute chart code
-    if chart_code:
-        st.markdown("### 📊 AI-Generated Visualization")
         try:
-            local_env = {"df": df, "plt": plt, "st": st}
-            exec(chart_code, local_env)
+            response_text, code_block = gpt_output.split("```python")
+            code_snippet = code_block.replace("```", "").strip()
+        except:
+            response_text = gpt_output
+            code_snippet = ""
+
+        st.success(response_text.strip())
+        speak_text(response_text.strip())
+
+with col2:
+    st.header("📊 Visual Insight")
+    if question and code_snippet:
+        try:
+            exec_env = {"df": df, "plt": plt, "st": st}
+            exec(code_snippet, exec_env)
         except Exception as e:
-            st.error("⚠️ Error running AI-generated chart code:")
+            st.error("GPT chart code failed. Here's a fallback chart:")
             st.code(traceback.format_exc())
+            if "Booking Date" in df.columns:
+                fallback = df.set_index("Booking Date").resample("M")["Net Sale Value (AED)"].sum()
+                fig, ax = plt.subplots()
+                fallback.plot(ax=ax)
+                ax.set_title("Fallback: Monthly Sales Trend")
+                st.pyplot(fig)
+    elif question:
+        st.info("Waiting for chart generation...")
+
+st.markdown("---")
+st.caption("Powered by GPT-4 | Built for Executive Dashboards")
