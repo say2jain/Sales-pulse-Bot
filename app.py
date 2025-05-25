@@ -2,110 +2,92 @@
 import streamlit as st
 import pandas as pd
 import openai
-import speech_recognition as sr
+import matplotlib.pyplot as plt
 from gtts import gTTS
 import os
-import matplotlib.pyplot as plt
+from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, ClientSettings
+import speech_recognition as sr
+import tempfile
 
-# Set OpenAI API key
-openai.api_key = st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets else "sk-..."
-
-# Load and clean data
+# Load data
 @st.cache_data
 def load_data():
     df = pd.read_csv("Sales data.csv")
     df["Booking Date"] = pd.to_datetime(df["Booking Date"], errors='coerce')
     df["Net Sale Value (AED)"] = pd.to_numeric(df["Net Sale Value (AED)"], errors='coerce')
     df["Total Saleable Area (Sqft)"] = pd.to_numeric(df["Total Saleable Area (Sqft)"], errors='coerce')
-    return df
+    return df[df["Unit Type"].notna()]  # Filter out missing unit types
 
 df = load_data()
 
-# Voice input function
-def transcribe_audio():
-    r = sr.Recognizer()
-    with sr.Microphone() as source:
-        st.info("Listening... Please speak.")
-        audio = r.listen(source)
-    try:
-        return r.recognize_google(audio)
-    except sr.UnknownValueError:
-        return "Sorry, I could not understand your voice."
-    except sr.RequestError as e:
-        return f"Could not request results; {e}"
+# Text to speech
+def speak_text(text):
+    tts = gTTS(text)
+    tts.save("response.mp3")
+    audio_file = open("response.mp3", "rb")
+    st.audio(audio_file.read(), format="audio/mp3")
 
-# Ask GPT with structured context
-def ask_ai(question, context):
+# AI response
+def get_ai_response(question, sample_data):
     prompt = f"""
-You are a smart real estate data assistant. You are analyzing structured sales data.
+You are an AI sales analyst. Answer the user's question based on the sales data provided. Suggest or describe relevant charts if applicable.
 
-Field meanings:
-- Master Development: Top-level location hierarchy.
-- Project Name: Subdivision of master plan.
-- Unit Type: Property type (e.g. 2 BR, 3 BR). Use this, not ARC Unit Type.
-- Total Saleable Area (Sqft): Area of unit sold.
-- Net Sale Value (AED): Final sale price.
-- Deal Type: e.g., Direct Sales or Client with Broker.
+Sample Data:
+{sample_data}
 
-Use this sample data:
-{context}
-
-Answer this question in a detailed yet clear manner:
-{question}
+Question: {question}
 """
-    response = openai.ChatCompletion.create(
+    completion = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response.choices[0].message.content.strip()
+    return completion.choices[0].message.content.strip()
 
-# Text to speech
-def speak(text):
-    tts = gTTS(text)
-    tts.save("response.mp3")
-    os.system("start response.mp3" if os.name == "nt" else "afplay response.mp3")
+# Intent-based charting
+def render_chart(question):
+    st.subheader("📊 Suggested Chart")
+    if "nationality" in question.lower():
+        data = df.groupby("P1 Nationality")["Net Sale Value (AED)"].sum().sort_values(ascending=False).head(10)
+        fig, ax = plt.subplots()
+        data.plot(kind="bar", ax=ax)
+        ax.set_title("Top Nationalities by Sales")
+        st.pyplot(fig)
 
-# Charts
-def show_charts(df):
-    st.subheader("📊 Smart Visualizations")
+    elif "unit type" in question.lower():
+        data = df.groupby("Unit Type")["Net Sale Value (AED)"].mean()
+        fig, ax = plt.subplots()
+        data.plot(kind="bar", ax=ax)
+        ax.set_title("Avg Net Sale Value by Unit Type")
+        st.pyplot(fig)
 
-    # Unit Type Distribution
-    st.markdown("**Unit Type Distribution**")
-    unit_type_counts = df["Unit Type"].value_counts()
-    fig1, ax1 = plt.subplots()
-    ax1.pie(unit_type_counts, labels=unit_type_counts.index, autopct="%1.1f%%")
-    ax1.axis("equal")
-    st.pyplot(fig1)
+    elif "project" in question.lower() or "master" in question.lower():
+        data = df.groupby("Project Name")["Net Sale Value (AED)"].sum().sort_values(ascending=False).head(10)
+        fig, ax = plt.subplots()
+        data.plot(kind="bar", ax=ax)
+        ax.set_title("Top Projects by Total Sales")
+        st.pyplot(fig)
 
-    # Nationality Sales
-    st.markdown("**Top Nationalities by Net Sales**")
-    top_nat = df.groupby("P1 Nationality")["Net Sale Value (AED)"].sum().sort_values(ascending=False).head(10)
-    fig2, ax2 = plt.subplots()
-    top_nat.plot(kind="bar", ax=ax2)
-    st.pyplot(fig2)
-
-    # Sale Trend
-    st.markdown("**Monthly Sales Trend**")
-    trend = df.set_index("Booking Date").resample("M")["Net Sale Value (AED)"].sum()
-    fig3, ax3 = plt.subplots()
-    trend.plot(ax=ax3)
-    st.pyplot(fig3)
+    elif "trend" in question.lower() or "monthly" in question.lower():
+        trend = df.set_index("Booking Date").resample("M")["Net Sale Value (AED)"].sum()
+        fig, ax = plt.subplots()
+        trend.plot(ax=ax)
+        ax.set_title("Monthly Sales Trend")
+        st.pyplot(fig)
+    else:
+        st.info("No specific chart identified for this query.")
 
 # Streamlit UI
 st.set_page_config(layout="wide")
-st.title("🏠 Real Estate Voice AI Bot")
+st.title("🎙️ AI Voice Bot – Real Estate Sales Analyst")
 
-col1, col2 = st.columns(2)
+# Text input fallback
+st.markdown("#### Speak or type your question:")
 
-with col1:
-    st.header("🎙️ Talk to the Data")
-    if st.button("Ask via Voice"):
-        user_query = transcribe_audio()
-        st.write(f"**You asked:** {user_query}")
-        context_data = df.sample(20).to_string()
-        answer = ask_ai(user_query, context_data)
-        st.success(answer)
-        speak(answer)
+user_question = st.text_input("Try: 'Show sales by nationality' or 'Compare unit types'")
 
-with col2:
-    show_charts(df)
+if user_question:
+    st.markdown(f"**You asked:** {user_question}")
+    answer = get_ai_response(user_question, df.sample(20).to_string())
+    st.success(answer)
+    speak_text(answer)
+    render_chart(user_question)

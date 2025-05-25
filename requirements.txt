@@ -2,6 +2,6 @@
 streamlit
 pandas
 openai
-SpeechRecognition
-gtts
 matplotlib
+gtts
+streamlit-webrtc
