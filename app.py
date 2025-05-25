@@ -1,16 +1,14 @@
 
 import streamlit as st
 import pandas as pd
-import openai
 import matplotlib.pyplot as plt
 from gtts import gTTS
-import io
-import base64
+import os
 import traceback
 from openai import OpenAI
 
-# Init GPT client
-client = OpenAI()
+# Load API key from environment (Streamlit secrets)
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 st.set_page_config(layout="wide")
 st.title("🤖 AI Voice Bot – Continuous Executive Assistant")
@@ -40,7 +38,7 @@ def speak_response(text):
     audio_file = open("temp.mp3", "rb")
     st.audio(audio_file.read(), format="audio/mp3")
 
-# Ask GPT
+# Ask GPT-3.5-turbo
 def get_response(question, schema):
     prompt = f"""
 You're a data assistant. Based on the schema and a question:
@@ -60,7 +58,7 @@ Format:
 ```
 """
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content.strip()
@@ -91,7 +89,6 @@ with col1:
             st.session_state.history.append({"role": "assistant", "content": "Error getting response."})
             st.error("⚠️ GPT failed: " + str(e))
 
-    # Show conversation history
     for msg in st.session_state.history[::-1]:
         st.markdown(f"**{msg['role'].capitalize()}:** {msg['content']}")
 
