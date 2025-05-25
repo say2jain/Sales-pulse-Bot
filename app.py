@@ -4,99 +4,108 @@ import pandas as pd
 import openai
 import matplotlib.pyplot as plt
 from gtts import gTTS
-import os
+import io
+import base64
 import traceback
-from streamlit_webrtc import webrtc_streamer, AudioProcessorBase
+from openai import OpenAI
+
+# Init GPT client
+client = OpenAI()
 
 st.set_page_config(layout="wide")
-st.title("🎙️ Executive AI Voice Bot – Real Estate Insights")
+st.title("🤖 AI Voice Bot – Continuous Executive Assistant")
 
-openai.api_key = st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets else "sk-..."
-
+# Load Data
 st.sidebar.header("📂 Upload Sales Data")
-uploaded_file = st.sidebar.file_uploader("Upload your CSV", type=["csv"])
+uploaded_file = st.sidebar.file_uploader("Upload a CSV", type=["csv"])
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
-    st.success("✅ Custom data uploaded")
+    st.success("✅ Using uploaded data")
 else:
     df = pd.read_csv("Sales data.csv")
-    st.info("Using default data")
+    st.info("📌 Using default sales data")
 
 df.columns = df.columns.str.strip()
 if "Booking Date" in df.columns:
     df["Booking Date"] = pd.to_datetime(df["Booking Date"], errors='coerce')
 
-def speak_text(text):
+# Chat history
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+# TTS output
+def speak_response(text):
     tts = gTTS(text)
-    tts.save("response.mp3")
-    audio_file = open("response.mp3", "rb")
+    tts.save("temp.mp3")
+    audio_file = open("temp.mp3", "rb")
     st.audio(audio_file.read(), format="audio/mp3")
 
-def get_gpt_response(question, context_schema):
+# Ask GPT
+def get_response(question, schema):
     prompt = f"""
-You are a senior real estate data analyst bot. Based on the dataset schema and a natural language question, do two things:
-1. Return a short and useful business insight.
-2. Write a matplotlib chart code to visualize the answer.
+You're a data assistant. Based on the schema and a question:
+1. Answer in business terms.
+2. Then provide matplotlib chart code.
 
-Use this response format only:
+Schema:
+{schema}
+
+Question: {question}
+
+Format:
 <response>
 <code>
 ```python
-# your code here
+# your chart code here
 ```
-
-Schema:
-{context_schema}
-
-Question:
-{question}
 """
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content.strip()
 
+# Layout
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.header("🧠 Ask Your Question")
-    question = st.text_input("Type your question (e.g., 'Show top projects by sales')")
-    st.markdown("🎤 **Voice input coming soon** via browser mic")
+    st.header("💬 Ask me anything about the data")
+    question = st.text_input("Your question", key="q")
 
     if question:
-        st.markdown(f"**You asked:** {question}")
-        with st.spinner("Analyzing your data..."):
-            context = df.dtypes.astype(str).to_string()
-            gpt_output = get_gpt_response(question, context)
-
+        st.session_state.history.append({"role": "user", "content": question})
+        schema = df.dtypes.astype(str).to_string()
         try:
-            response_text, code_block = gpt_output.split("```python")
-            code_snippet = code_block.replace("```", "").strip()
-        except:
-            response_text = gpt_output
-            code_snippet = ""
+            output = get_response(question, schema)
+            if "```python" in output:
+                response_text, chart_code = output.split("```python")
+                chart_code = chart_code.replace("```", "").strip()
+            else:
+                response_text = output
+                chart_code = ""
 
-        st.success(response_text.strip())
-        speak_text(response_text.strip())
+            st.session_state.history.append({"role": "assistant", "content": response_text.strip()})
+            speak_response(response_text.strip())
+
+        except Exception as e:
+            st.session_state.history.append({"role": "assistant", "content": "Error getting response."})
+            st.error("⚠️ GPT failed: " + str(e))
+
+    # Show conversation history
+    for msg in st.session_state.history[::-1]:
+        st.markdown(f"**{msg['role'].capitalize()}:** {msg['content']}")
 
 with col2:
-    st.header("📊 Visual Insight")
-    if question and code_snippet:
+    st.header("📊 Smart Visuals")
+    if question and 'chart_code' in locals():
         try:
-            exec_env = {"df": df, "plt": plt, "st": st}
-            exec(code_snippet, exec_env)
-        except Exception as e:
-            st.error("GPT chart code failed. Here's a fallback chart:")
-            st.code(traceback.format_exc())
+            local_env = {"df": df, "plt": plt, "st": st}
+            exec(chart_code, local_env)
+        except Exception:
+            st.warning("⚠️ GPT chart failed. Here's a fallback:")
             if "Booking Date" in df.columns:
-                fallback = df.set_index("Booking Date").resample("M")["Net Sale Value (AED)"].sum()
+                trend = df.set_index("Booking Date").resample("M")["Net Sale Value (AED)"].sum()
                 fig, ax = plt.subplots()
-                fallback.plot(ax=ax)
+                trend.plot(ax=ax)
                 ax.set_title("Fallback: Monthly Sales Trend")
                 st.pyplot(fig)
-    elif question:
-        st.info("Waiting for chart generation...")
-
-st.markdown("---")
-st.caption("Powered by GPT-4 | Built for Executive Dashboards")
