@@ -3,91 +3,99 @@ import streamlit as st
 import pandas as pd
 import openai
 import matplotlib.pyplot as plt
+import io
 from gtts import gTTS
 import os
-from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, ClientSettings
-import speech_recognition as sr
-import tempfile
+import traceback
 
-# Load data
-@st.cache_data
-def load_data():
+# Set up page
+st.set_page_config(layout="wide")
+st.title("🤖 AI Voice Bot – Dynamic Real Estate Analyst")
+
+# Load OpenAI Key
+openai.api_key = st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets else "sk-..."
+
+# Upload data
+st.sidebar.header("📁 Upload Sales Data")
+uploaded_file = st.sidebar.file_uploader("Upload a CSV file", type=["csv"])
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+    st.success("✅ File uploaded successfully.")
+else:
     df = pd.read_csv("Sales data.csv")
+    st.info("📌 Using default sales data.")
+
+# Clean and prep data
+df.columns = df.columns.str.strip()
+if "Booking Date" in df.columns:
     df["Booking Date"] = pd.to_datetime(df["Booking Date"], errors='coerce')
-    df["Net Sale Value (AED)"] = pd.to_numeric(df["Net Sale Value (AED)"], errors='coerce')
-    df["Total Saleable Area (Sqft)"] = pd.to_numeric(df["Total Saleable Area (Sqft)"], errors='coerce')
-    return df[df["Unit Type"].notna()]  # Filter out missing unit types
 
-df = load_data()
+st.sidebar.markdown("### Sample of Loaded Data")
+st.sidebar.dataframe(df.head(5))
 
-# Text to speech
+# Text-to-speech
 def speak_text(text):
     tts = gTTS(text)
     tts.save("response.mp3")
     audio_file = open("response.mp3", "rb")
     st.audio(audio_file.read(), format="audio/mp3")
 
-# AI response
-def get_ai_response(question, sample_data):
+# GPT function for both answering and generating chart code
+def get_gpt_response(question, context_schema):
     prompt = f"""
-You are an AI sales analyst. Answer the user's question based on the sales data provided. Suggest or describe relevant charts if applicable.
+You are a data analyst AI. Given a question and the structure of a dataset, do two things:
+1. Provide a brief natural language answer or insight.
+2. Generate a Python matplotlib chart code snippet (within a function) based on the question.
 
-Sample Data:
-{sample_data}
+Respond in this format strictly:
+<response>
+<code>
+```python
+# your code here
+```
+
+Here is the dataset schema:
+{context_schema}
 
 Question: {question}
 """
-    completion = openai.ChatCompletion.create(
+    response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    return completion.choices[0].message.content.strip()
+    return response.choices[0].message.content.strip()
 
-# Intent-based charting
-def render_chart(question):
-    st.subheader("📊 Suggested Chart")
-    if "nationality" in question.lower():
-        data = df.groupby("P1 Nationality")["Net Sale Value (AED)"].sum().sort_values(ascending=False).head(10)
-        fig, ax = plt.subplots()
-        data.plot(kind="bar", ax=ax)
-        ax.set_title("Top Nationalities by Sales")
-        st.pyplot(fig)
+# UI for asking questions
+st.markdown("## 🎙️ Ask Your Question About the Data")
+user_input = st.text_input("E.g., What are top nationalities by net sale value?")
 
-    elif "unit type" in question.lower():
-        data = df.groupby("Unit Type")["Net Sale Value (AED)"].mean()
-        fig, ax = plt.subplots()
-        data.plot(kind="bar", ax=ax)
-        ax.set_title("Avg Net Sale Value by Unit Type")
-        st.pyplot(fig)
+if user_input:
+    st.markdown(f"**You asked:** {user_input}")
+    # Schema sample
+    context = df.dtypes.astype(str).to_string()
+    with st.spinner("🧠 Thinking..."):
+        gpt_output = get_gpt_response(user_input, context)
 
-    elif "project" in question.lower() or "master" in question.lower():
-        data = df.groupby("Project Name")["Net Sale Value (AED)"].sum().sort_values(ascending=False).head(10)
-        fig, ax = plt.subplots()
-        data.plot(kind="bar", ax=ax)
-        ax.set_title("Top Projects by Total Sales")
-        st.pyplot(fig)
+    # Split response and code
+    try:
+        response_part, code_part = gpt_output.split("```python")
+        chart_code = code_part.replace("```", "").strip()
+    except:
+        st.error("Could not parse the GPT response. Here's what it returned:")
+        st.code(gpt_output)
+        response_part = gpt_output
+        chart_code = ""
 
-    elif "trend" in question.lower() or "monthly" in question.lower():
-        trend = df.set_index("Booking Date").resample("M")["Net Sale Value (AED)"].sum()
-        fig, ax = plt.subplots()
-        trend.plot(ax=ax)
-        ax.set_title("Monthly Sales Trend")
-        st.pyplot(fig)
-    else:
-        st.info("No specific chart identified for this query.")
+    # Show natural language answer
+    st.success(response_part.strip())
+    speak_text(response_part.strip())
 
-# Streamlit UI
-st.set_page_config(layout="wide")
-st.title("🎙️ AI Voice Bot – Real Estate Sales Analyst")
-
-# Text input fallback
-st.markdown("#### Speak or type your question:")
-
-user_question = st.text_input("Try: 'Show sales by nationality' or 'Compare unit types'")
-
-if user_question:
-    st.markdown(f"**You asked:** {user_question}")
-    answer = get_ai_response(user_question, df.sample(20).to_string())
-    st.success(answer)
-    speak_text(answer)
-    render_chart(user_question)
+    # Execute chart code
+    if chart_code:
+        st.markdown("### 📊 AI-Generated Visualization")
+        try:
+            local_env = {"df": df, "plt": plt, "st": st}
+            exec(chart_code, local_env)
+        except Exception as e:
+            st.error("⚠️ Error running AI-generated chart code:")
+            st.code(traceback.format_exc())

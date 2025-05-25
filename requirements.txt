@@ -4,4 +4,3 @@ pandas
 openai
 matplotlib
 gtts
-streamlit-webrtc
